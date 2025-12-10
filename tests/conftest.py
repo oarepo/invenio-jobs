@@ -20,7 +20,7 @@ from invenio_access.permissions import any_user as any_user_need
 from invenio_accounts.models import Role
 from invenio_administration.permissions import administration_access_action
 from invenio_app.factory import create_api
-from invenio_records_permissions.generators import AnyUser
+from invenio_records_permissions.generators import AnyUser, SystemProcess
 from invenio_records_permissions.policies import BasePermissionPolicy
 
 from invenio_jobs.proxies import current_jobs_service
@@ -45,7 +45,7 @@ def app_config(app_config):
     """Application config override."""
 
     class MockPermissionPolicy(BasePermissionPolicy):
-        can_search = [AnyUser()]
+        can_search = [AnyUser(), SystemProcess()]
         can_create = [AnyUser()]
         can_read = [AnyUser()]
         can_update = [AnyUser()]
