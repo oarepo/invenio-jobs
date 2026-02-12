@@ -8,7 +8,6 @@
 
 """Models."""
 
-import contextlib
 import enum
 import json
 import uuid
@@ -20,9 +19,7 @@ from celery.schedules import crontab
 from invenio_accounts.models import User
 from invenio_db import db
 from invenio_users_resources.records import UserAggregate
-from sqlalchemy import event, func, select
 from sqlalchemy.dialects import postgresql
-from sqlalchemy.orm import aliased
 from sqlalchemy_utils import Timestamp
 from sqlalchemy_utils.types import ChoiceType, JSONType, UUIDType
 from werkzeug.utils import cached_property
@@ -56,65 +53,79 @@ class Job(db.Model, Timestamp):
     default_queue = db.Column(db.String(64))
     schedule = db.Column(JSON, nullable=True)
 
-    @cached_property
+    # last_run_id for each status in RunStatusEnum
+    last_run_id = db.Column(UUIDType, db.ForeignKey("jobs_run.id"))
+    last_queued_run_id = db.Column(UUIDType, db.ForeignKey("jobs_run.id"))
+    last_running_run_id = db.Column(UUIDType, db.ForeignKey("jobs_run.id"))
+    last_success_run_id = db.Column(UUIDType, db.ForeignKey("jobs_run.id"))
+    last_failed_run_id = db.Column(UUIDType, db.ForeignKey("jobs_run.id"))
+    last_warning_run_id = db.Column(UUIDType, db.ForeignKey("jobs_run.id"))
+    last_cancelling_run_id = db.Column(UUIDType, db.ForeignKey("jobs_run.id"))
+    last_cancelled_run_id = db.Column(UUIDType, db.ForeignKey("jobs_run.id"))
+    last_partial_success_run_id = db.Column(UUIDType, db.ForeignKey("jobs_run.id"))
+
+    # # canonical ownership rel
+    # runs = db.relationship(
+    #     "Run",
+    #     back_populates="job",
+    #     foreign_keys="Run.job_id",
+    #     cascade="all, delete-orphan",
+    # )
+    runs = db.relationship(
+        "Run",
+        back_populates="job",
+        foreign_keys="Run.job_id",
+        lazy="dynamic",
+    )
+
+    # pointer rels (explicit FK each time)
+    last_run_ref = db.relationship("Run", foreign_keys=[last_run_id], post_update=True)
+    last_queued_run_ref = db.relationship("Run", foreign_keys=[last_queued_run_id], post_update=True)
+    last_running_run_ref = db.relationship("Run", foreign_keys=[last_running_run_id], post_update=True)
+    last_success_run_ref = db.relationship("Run", foreign_keys=[last_success_run_id], post_update=True)
+    last_failed_run_ref = db.relationship("Run", foreign_keys=[last_failed_run_id], post_update=True)
+    last_warning_run_ref = db.relationship("Run", foreign_keys=[last_warning_run_id], post_update=True)
+    last_cancelling_run_ref = db.relationship("Run", foreign_keys=[last_cancelling_run_id], post_update=True)
+    last_cancelled_run_ref = db.relationship("Run", foreign_keys=[last_cancelled_run_id], post_update=True)
+    last_partial_success_run_ref = db.relationship("Run", foreign_keys=[last_partial_success_run_id], post_update=True)
+
+    @property
     def last_run(self):
         """Last run of the job."""
-        _run = self.runs.order_by(Run.created.desc()).first()
-        return _run if _run else {}
+        if self.last_run_id is None:
+            return {}
+        return self.runs.get(self.last_run_id)
 
-    @cached_property
+    @property
     def last_runs(self):
-        """Last run of the job."""
-        return self.bulk_load_last_runs([self])[self.id]
-
-    @classmethod
-    def bulk_load_last_runs(cls, jobs):
-        """Bulk load Job last_runs and save it on the jobs.
-
-        Loading last runs in bulk avoids N+1 queries when accessing
-        the last_runs property on multiple Job instances. This method
-        populates the cached_property `last_runs` on each Job instance
-        in the provided list.
-
-        :param jobs: List of Job instances to load last runs for.
-        """
-        job_ids = [job.id for job in jobs]
-
-        ranked = (
-            select(
-                Run,
-                func.row_number()
-                .over(
-                    partition_by=(Run.job_id, Run.status), order_by=Run.created.desc()
-                )
-                .label("rn"),
-            )
-            .where(Run.job_id.in_(job_ids))
-            .subquery()
+        """Last runs of the job."""
+        last_runs_dict = {
+            "cancelled": {},
+            "cancelling": {},
+            "failed": {},
+            "partial_success": {},
+            "queued": {},
+            "running": {},
+            "success": {},
+            "warning": {},
+        }
+        if self.last_run_id is None:
+            return last_runs_dict
+        last_runs = self.runs.filter(
+            [
+                self.last_queued_run_id,
+                self.last_running_run_id,
+                self.last_success_run_id,
+                self.last_failed_run_id,
+                self.last_warning_run_id,
+                self.last_cancelling_run_id,
+                self.last_cancelled_run_id,
+                self.last_partial_success_run_id,
+            ]
         )
-
-        latest_run = aliased(Run, ranked)
-
-        query = select(latest_run).where(ranked.c.rn == 1)
-
-        status_dict = {status.name.lower(): {} for status in RunStatusEnum}
-        job_by_id = {job.id: job for job in jobs}
-        jobs_last_runs = {job_id: status_dict.copy() for job_id in job_ids}
-
-        for run in db.session.execute(query).scalars():
-            jobs_last_runs[run.job_id][run.status.name.lower()] = run
-
-        for job_id, runs in jobs_last_runs.items():
-            job = job_by_id[job_id]
-            # fill in the cached_property of last_runs so that it doesn't
-            # trigger a new query when accessed.
-            # last_runs must contain all job status keys regardless if the run exists or not
-            # (in that case the dictionary for the status is empty)
-            job.last_runs = runs
-            # for last_run we need to take the latest run of the job
-            nonempty_runs = [run for run in runs.values() if run]
-            job.last_run = max(nonempty_runs, key=lambda r: r.created, default={})
-        return jobs_last_runs
+        for run in last_runs:
+            last_runs_dict[run.status.name.lower()] = run
+        return last_runs_dict
 
     @property
     def default_args(self):
@@ -139,22 +150,6 @@ class Job(db.Model, Timestamp):
         return _dump_dict(self)
 
 
-@event.listens_for(Job, "load")
-@event.listens_for(Job, "refresh")
-@event.listens_for(Job, "expire")
-def clear_cache(target, *args):
-    """Clear Job.last_runs cached_property.
-
-    As the last_runs is a cached_property, we need to clear it
-    when the Job instance is loaded/refreshed/expired to avoid
-    stale data.
-    """
-    with contextlib.suppress(AttributeError, KeyError):
-        del target.last_runs
-    with contextlib.suppress(AttributeError, KeyError):
-        del target.last_run
-
-
 class RunStatusEnum(enum.Enum):
     """Enumeration of a run's possible states."""
 
@@ -175,8 +170,10 @@ class Run(db.Model, Timestamp):
 
     id = db.Column(UUIDType, primary_key=True, default=uuid.uuid4)
 
-    job_id = db.Column(UUIDType, db.ForeignKey(Job.id))
-    job = db.relationship(Job, backref=db.backref("runs", lazy="dynamic"))
+    # job_id = db.Column(UUIDType, db.ForeignKey(Job.id))
+    # job = db.relationship(Job, backref=db.backref("runs", lazy="dynamic"))
+    job_id = db.Column(UUIDType, db.ForeignKey("jobs_job.id"), nullable=False)
+    job = db.relationship("Job", back_populates="runs", foreign_keys=[job_id])
 
     started_by_id = db.Column(db.Integer, db.ForeignKey(User.id), nullable=True)
     _started_by = db.relationship(User)

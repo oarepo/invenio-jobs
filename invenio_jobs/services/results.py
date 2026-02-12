@@ -131,7 +131,6 @@ class JobList(List):
     @property
     def hits(self):
         """Iterator over the hits."""
-        Job.bulk_load_last_runs(self.items)
         for hit in self.items:
             # Project the hit
             job_dict = hit.dump()
