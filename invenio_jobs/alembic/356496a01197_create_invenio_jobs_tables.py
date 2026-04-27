@@ -21,7 +21,10 @@ from invenio_jobs.models import RunStatusEnum
 revision = "356496a01197"
 down_revision = "371f4cbcb73d"
 branch_labels = ()
-depends_on = None
+depends_on = [
+    # invenio_accounts/alembic/9848d0149abd_create_accounts_tables.py
+    "9848d0149abd"
+]
 
 
 def upgrade():
