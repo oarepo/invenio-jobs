@@ -11,7 +11,6 @@ import pytest
 from invenio_db.utils import alembic_test_context, drop_alembic_version_table
 
 
-@pytest.mark.skip("endles loop")
 def test_alembic(base_app, database):
     """Test alembic recipes."""
     db = database
@@ -38,7 +37,7 @@ def test_alembic(base_app, database):
 
     # Try to upgrade and downgrade
     ext.alembic.stamp()
-    ext.alembic.downgrade(target="1753948224")
+    ext.alembic.downgrade(target="1f896f6990b8")
     ext.alembic.upgrade()
     assert len(ext.alembic.compare_metadata()) == 0
 
